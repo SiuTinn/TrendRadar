@@ -11,7 +11,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr, formatdate, make_msgid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 
@@ -123,6 +123,9 @@ def load_config():
             or config_data["notification"]
             .get("push_window", {})
             .get("push_record_retention_days", 7),
+            "WINDOWS": config_data["notification"].get("push_window", {}).get(
+                "windows", {}
+            ),
         },
         "WEIGHT_CONFIG": {
             "RANK_WEIGHT": config_data["weight"]["rank_weight"],
@@ -378,21 +381,40 @@ class PushRecordManager:
             print(f"读取推送记录失败: {e}")
             return False
 
-    def record_push(self, report_type: str):
-        """记录推送"""
+    def record_push(self, report_type: str, window: str = "default"):
+        """记录推送（支持不同时间窗口）"""
         record_file = self.get_today_record_file()
         now = get_beijing_time()
 
-        record = {
+        existing_records = {}
+        if os.path.exists(record_file):
+            try:
+                with open(record_file, "r", encoding="utf-8") as f:
+                    existing_records = json.load(f)
+            except Exception as e:
+                print(f"读取推送记录失败 {record_file}: {e}")
+                existing_records = {}
+
+        if "windows" not in existing_records:
+            existing_records["windows"] = {}
+
+        existing_records["windows"][window] = {
             "pushed": True,
             "push_time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "report_type": report_type,
         }
 
+        # 兼容旧逻辑：记录当天已推送及最近一次推送信息
+        existing_records["pushed"] = True
+        existing_records["push_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        existing_records["report_type"] = report_type
+
         try:
             with open(record_file, "w", encoding="utf-8") as f:
-                json.dump(record, f, ensure_ascii=False, indent=2)
-            print(f"推送记录已保存: {report_type} at {now.strftime('%H:%M:%S')}")
+                json.dump(existing_records, f, ensure_ascii=False, indent=2)
+            print(
+                f"推送记录已保存: {window}窗口 {report_type} at {now.strftime('%H:%M:%S')}"
+            )
         except Exception as e:
             print(f"保存推送记录失败: {e}")
 
@@ -440,26 +462,23 @@ class PushRecordManager:
         if os.path.exists(record_file):
             try:
                 with open(record_file, "r", encoding="utf-8") as f:
-                    existing_records = json.load(f)
-            except:
-                existing_records = {}
-        
-        # 更新指定窗口的记录
-        if "windows" not in existing_records:
-            existing_records["windows"] = {}
-            
-        existing_records["windows"][window] = {
-            "pushed": True,
-            "push_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "report_type": report_type,
-        }
-        
-        try:
-            with open(record_file, "w", encoding="utf-8") as f:
-                json.dump(existing_records, f, ensure_ascii=False, indent=2)
-            print(f"推送记录已保存: {window}窗口 {report_type} at {now.strftime('%H:%M:%S')}")
-        except Exception as e:
-            print(f"保存推送记录失败: {e}")
+                    record = json.load(f)
+            except Exception as e:
+                print(f"读取推送记录失败 {record_file}: {e}")
+                continue
+
+            window_info = record.get("windows", {}).get(window)
+            push_time_str = window_info.get("push_time") if window_info else None
+            if not push_time_str:
+                continue
+
+            try:
+                naive_time = datetime.strptime(push_time_str, "%Y-%m-%d %H:%M:%S")
+                return tz.localize(naive_time)
+            except Exception as e:
+                print(f"解析推送时间失败 {push_time_str}: {e}")
+
+        return None
     
     def has_pushed_in_window(self, window: str) -> bool:
         """检查指定时间窗口今天是否已推送"""
@@ -476,16 +495,37 @@ class PushRecordManager:
     
     def get_current_window(self) -> Optional[str]:
         """获取当前所在的时间窗口"""
+        windows = CONFIG["PUSH_WINDOW"].get("WINDOWS", {})
+        if not windows:
+            windows = {
+                "morning": {"start": "08:00", "end": "10:00"},
+                "evening": {"start": "17:00", "end": "19:00"},
+            }
+
         now = get_beijing_time()
         current_time = now.strftime("%H:%M")
-        
-        # 早晨窗口: 08:00-10:00
-        if "08:00" <= current_time <= "10:00":
-            return "morning"
-        # 傍晚窗口: 17:00-19:00
-        elif "17:00" <= current_time <= "19:00":
-            return "evening"
-        
+
+        def normalize_time(time_str: str) -> str:
+            try:
+                hour, minute = time_str.strip().split(":")
+                return f"{int(hour):02d}:{int(minute):02d}"
+            except Exception:
+                return time_str
+
+        normalized_current = normalize_time(current_time)
+
+        for window_name, time_range in windows.items():
+            start = time_range.get("start")
+            end = time_range.get("end")
+            if not start or not end:
+                continue
+
+            normalized_start = normalize_time(start)
+            normalized_end = normalize_time(end)
+
+            if normalized_start <= normalized_current <= normalized_end:
+                return window_name
+
         return None
 
 
@@ -826,6 +866,155 @@ def read_all_today_titles(
             process_source_data(
                 source_id, title_data, time_info, all_results, title_info
             )
+
+    return all_results, final_id_to_name, title_info
+
+
+def parse_date_folder_name(folder_name: str) -> Optional[datetime]:
+    """解析日期文件夹名称为 datetime 对象"""
+    match = re.match(r"(\d{4})年(\d{2})月(\d{2})日", folder_name)
+    if not match:
+        return None
+
+    year, month, day = map(int, match.groups())
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def parse_time_from_filename(date_value: datetime, time_str: str) -> Optional[datetime]:
+    """将文件名中的时间信息解析为 datetime（含日期）"""
+    match = re.match(r"(\d{1,2})时(\d{1,2})分", time_str)
+    if not match:
+        return None
+
+    hour, minute = map(int, match.groups())
+
+    try:
+        return datetime(
+            date_value.year,
+            date_value.month,
+            date_value.day,
+            hour,
+            minute,
+        )
+    except ValueError:
+        return None
+
+
+def format_time_label(file_time: datetime, reference_date: datetime.date) -> str:
+    """格式化展示用的时间标签"""
+    if file_time.date() == reference_date:
+        return file_time.strftime("%H时%M分")
+    return file_time.strftime("%m月%d日 %H:%M")
+
+
+def read_titles_in_time_range(
+    start_time: Optional[datetime],
+    end_time: Optional[datetime],
+    current_platform_ids: Optional[List[str]] = None,
+) -> Tuple[Dict, Dict, Dict]:
+    """读取指定时间范围内的标题数据"""
+
+    tz = pytz.timezone("Asia/Shanghai")
+    if end_time is None:
+        end_time = get_beijing_time()
+
+    if end_time.tzinfo is None:
+        end_time = tz.localize(end_time)
+    else:
+        end_time = end_time.astimezone(tz)
+
+    if start_time is not None:
+        if start_time.tzinfo is None:
+            start_time = tz.localize(start_time)
+        else:
+            start_time = start_time.astimezone(tz)
+
+    output_dir = Path("output")
+    if not output_dir.exists():
+        return {}, {}, {}
+
+    date_directories: List[Tuple[datetime, Path]] = []
+    for child in output_dir.iterdir():
+        if not child.is_dir():
+            continue
+
+        parsed_date = parse_date_folder_name(child.name)
+        if not parsed_date:
+            continue
+
+        day_start = tz.localize(
+            datetime(parsed_date.year, parsed_date.month, parsed_date.day)
+        )
+        day_end = day_start + timedelta(days=1)
+
+        # 如果整个日期都在时间范围外则跳过
+        if start_time and day_end <= start_time:
+            continue
+        if day_start > end_time:
+            continue
+
+        date_directories.append((parsed_date, child))
+
+    if not date_directories:
+        return {}, {}, {}
+
+    date_directories.sort(key=lambda x: x[0])
+
+    all_results: Dict = {}
+    final_id_to_name: Dict = {}
+    title_info: Dict = {}
+
+    reference_date = end_time.date()
+
+    for date_value, directory in date_directories:
+        txt_dir = directory / "txt"
+        if not txt_dir.exists():
+            continue
+
+        files = sorted([f for f in txt_dir.iterdir() if f.suffix == ".txt"])
+
+        if not files:
+            continue
+
+        for file_path in files:
+            file_time = parse_time_from_filename(date_value, file_path.stem)
+            if not file_time:
+                continue
+
+            localized_file_time = tz.localize(file_time)
+
+            if start_time and localized_file_time <= start_time:
+                continue
+            if localized_file_time > end_time:
+                break
+
+            titles_by_id, file_id_to_name = parse_file_titles(file_path)
+
+            if current_platform_ids is not None:
+                filtered_titles = {}
+                filtered_ids = {}
+                for source_id, title_data in titles_by_id.items():
+                    if source_id in current_platform_ids:
+                        filtered_titles[source_id] = title_data
+                        if source_id in file_id_to_name:
+                            filtered_ids[source_id] = file_id_to_name[source_id]
+                titles_by_id = filtered_titles
+                file_id_to_name = filtered_ids
+
+            if not titles_by_id:
+                continue
+
+            final_id_to_name.update(file_id_to_name)
+
+            time_label = format_time_label(localized_file_time, reference_date)
+
+            for source_id, title_data in titles_by_id.items():
+                process_source_data(
+                    source_id, title_data, time_label, all_results, title_info
+                )
 
     return all_results, final_id_to_name, title_info
 
@@ -4202,6 +4391,8 @@ class NewsAnalyzer:
 
     def _load_analysis_data(
         self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
     ) -> Optional[Tuple[Dict, Dict, Dict, Dict, List, List]]:
         """统一的数据加载和预处理，使用当前监控平台列表过滤历史数据"""
         try:
@@ -4212,12 +4403,20 @@ class NewsAnalyzer:
 
             print(f"当前监控平台: {current_platform_ids}")
 
-            all_results, id_to_name, title_info = read_all_today_titles(
-                current_platform_ids
-            )
+            if start_time or end_time:
+                all_results, id_to_name, title_info = read_titles_in_time_range(
+                    start_time, end_time, current_platform_ids
+                )
+            else:
+                all_results, id_to_name, title_info = read_all_today_titles(
+                    current_platform_ids
+                )
 
             if not all_results:
-                print("没有找到当天的数据")
+                if start_time or end_time:
+                    print("没有找到指定时间范围的数据")
+                else:
+                    print("没有找到当天的数据")
                 return None
 
             total_titles = sum(len(titles) for titles in all_results.values())
@@ -4237,6 +4436,32 @@ class NewsAnalyzer:
         except Exception as e:
             print(f"数据加载失败: {e}")
             return None
+
+    def _get_summary_time_range(
+        self, summary_mode: str
+    ) -> Tuple[Optional[datetime], Optional[datetime]]:
+        """根据模式和时间窗口确定汇总时间范围"""
+
+        end_time = get_beijing_time()
+
+        if summary_mode != "daily" or not CONFIG["PUSH_WINDOW"]["ENABLED"]:
+            return None, None
+
+        push_manager = PushRecordManager()
+        current_window = push_manager.get_current_window()
+
+        start_time: Optional[datetime] = None
+        if current_window == "morning":
+            start_time = push_manager.get_last_push_time("evening")
+        elif current_window == "evening":
+            start_time = push_manager.get_last_push_time("morning")
+
+        if start_time is None:
+            if end_time is None:
+                return None, None
+            start_time = end_time - timedelta(days=1)
+
+        return start_time, end_time
 
     def _prepare_current_title_info(self, results: Dict, time_info: str) -> Dict:
         """从当前抓取结果构建标题信息"""
@@ -4357,7 +4582,28 @@ class NewsAnalyzer:
         print(f"生成{summary_type}报告...")
 
         # 加载分析数据
-        analysis_data = self._load_analysis_data()
+        start_time, end_time = self._get_summary_time_range(
+            mode_strategy["summary_mode"]
+        )
+        if (
+            mode_strategy["summary_mode"] == "daily"
+            and CONFIG["PUSH_WINDOW"]["ENABLED"]
+            and end_time
+        ):
+            if start_time:
+                print(
+                    "汇总数据时间范围："
+                    f"{start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    " ~ "
+                    f"{end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            else:
+                print(
+                    "汇总数据时间范围：未找到上一窗口推送记录，"
+                    f"统计截至 {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+
+        analysis_data = self._load_analysis_data(start_time, end_time)
         if not analysis_data:
             return None
 
@@ -4398,7 +4644,22 @@ class NewsAnalyzer:
         print(f"生成{summary_type}HTML...")
 
         # 加载分析数据
-        analysis_data = self._load_analysis_data()
+        start_time, end_time = self._get_summary_time_range(mode)
+        if mode == "daily" and CONFIG["PUSH_WINDOW"]["ENABLED"] and end_time:
+            if start_time:
+                print(
+                    "汇总数据时间范围："
+                    f"{start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    " ~ "
+                    f"{end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            else:
+                print(
+                    "汇总数据时间范围：未找到上一窗口推送记录，"
+                    f"统计截至 {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+
+        analysis_data = self._load_analysis_data(start_time, end_time)
         if not analysis_data:
             return None
 
