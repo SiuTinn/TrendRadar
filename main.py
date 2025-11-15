@@ -451,15 +451,15 @@ class PushRecordManager:
             print(f"时间窗口判断：当前 {normalized_current}，窗口 {normalized_start}-{normalized_end}")
     
         return result
-
-    def get_last_push_time(self, window: str) -> Optional[datetime]:
-        """获取指定窗口最近一次推送时间"""
-        tz = pytz.timezone("Asia/Shanghai")
-        record_files = sorted(
-            self.record_dir.glob("push_record_*.json"), reverse=True
-        )
-
-        for record_file in record_files:
+    
+    def record_push(self, report_type: str, window: str = "default"):
+        """记录推送（支持不同时间窗口）"""
+        record_file = self.get_today_record_file()
+        now = get_beijing_time()
+        
+        # 读取现有记录
+        existing_records = {}
+        if os.path.exists(record_file):
             try:
                 with open(record_file, "r", encoding="utf-8") as f:
                     record = json.load(f)
