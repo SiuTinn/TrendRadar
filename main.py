@@ -429,8 +429,8 @@ class PushRecordManager:
             print(f"时间窗口判断：当前 {normalized_current}，窗口 {normalized_start}-{normalized_end}")
     
         return result
-
-       def record_push(self, report_type: str, window: str = "default"):
+    
+    def record_push(self, report_type: str, window: str = "default"):
         """记录推送（支持不同时间窗口）"""
         record_file = self.get_today_record_file()
         now = get_beijing_time()
