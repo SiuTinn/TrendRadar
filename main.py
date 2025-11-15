@@ -430,6 +430,64 @@ class PushRecordManager:
     
         return result
 
+       def record_push(self, report_type: str, window: str = "default"):
+        """记录推送（支持不同时间窗口）"""
+        record_file = self.get_today_record_file()
+        now = get_beijing_time()
+        
+        # 读取现有记录
+        existing_records = {}
+        if os.path.exists(record_file):
+            try:
+                with open(record_file, "r", encoding="utf-8") as f:
+                    existing_records = json.load(f)
+            except:
+                existing_records = {}
+        
+        # 更新指定窗口的记录
+        if "windows" not in existing_records:
+            existing_records["windows"] = {}
+            
+        existing_records["windows"][window] = {
+            "pushed": True,
+            "push_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "report_type": report_type,
+        }
+        
+        try:
+            with open(record_file, "w", encoding="utf-8") as f:
+                json.dump(existing_records, f, ensure_ascii=False, indent=2)
+            print(f"推送记录已保存: {window}窗口 {report_type} at {now.strftime('%H:%M:%S')}")
+        except Exception as e:
+            print(f"保存推送记录失败: {e}")
+    
+    def has_pushed_in_window(self, window: str) -> bool:
+        """检查指定时间窗口今天是否已推送"""
+        record_file = self.get_today_record_file()
+        if not os.path.exists(record_file):
+            return False
+            
+        try:
+            with open(record_file, "r", encoding="utf-8") as f:
+                record = json.load(f)
+                return record.get("windows", {}).get(window, {}).get("pushed", False)
+        except:
+            return False
+    
+    def get_current_window(self) -> Optional[str]:
+        """获取当前所在的时间窗口"""
+        now = get_beijing_time()
+        current_time = now.strftime("%H:%M")
+        
+        # 早晨窗口: 08:00-10:00
+        if "08:00" <= current_time <= "10:00":
+            return "morning"
+        # 傍晚窗口: 17:00-19:00
+        elif "17:00" <= current_time <= "19:00":
+            return "evening"
+        
+        return None
+
 
 # === 数据获取 ===
 class DataFetcher:
@@ -3308,22 +3366,27 @@ def send_to_notifications(
 
     if CONFIG["PUSH_WINDOW"]["ENABLED"]:
         push_manager = PushRecordManager()
-        time_range_start = CONFIG["PUSH_WINDOW"]["TIME_RANGE"]["START"]
-        time_range_end = CONFIG["PUSH_WINDOW"]["TIME_RANGE"]["END"]
-
-        if not push_manager.is_in_time_range(time_range_start, time_range_end):
+        
+        # 获取当前时间窗口
+        current_window = push_manager.get_current_window()
+        
+        if not current_window:
             now = get_beijing_time()
-            print(
-                f"推送窗口控制：当前时间 {now.strftime('%H:%M')} 不在推送时间窗口 {time_range_start}-{time_range_end} 内，跳过推送"
-            )
+            print(f"推送窗口控制：当前时间 {now.strftime('%H:%M')} 不在任何推送窗口内，跳过推送")
             return results
-
-        if CONFIG["PUSH_WINDOW"]["ONCE_PER_DAY"]:
-            if push_manager.has_pushed_today():
-                print(f"推送窗口控制：今天已推送过，跳过本次推送")
-                return results
-            else:
-                print(f"推送窗口控制：今天首次推送")
+        
+        # 检查当前窗口是否已推送
+        if push_manager.has_pushed_in_window(current_window):
+            print(f"推送窗口控制：{current_window}窗口今天已推送过，跳过本次推送")
+            return results
+        else:
+            # 根据窗口调整报告类型
+            if current_window == "morning":
+                report_type = "早晨汇总"
+                print(f"推送窗口控制：早晨窗口首次推送（汇总前一天傍晚后到今早的新闻）")
+            elif current_window == "evening":
+                report_type = "傍晚汇总"
+                print(f"推送窗口控制：傍晚窗口首次推送（汇总早晨推送后到现在的新闻）")
 
     report_data = prepare_report_data(stats, failed_ids, new_titles, id_to_name, mode)
 
@@ -3402,14 +3465,13 @@ def send_to_notifications(
         print("未配置任何通知渠道，跳过通知发送")
 
     # 如果成功发送了任何通知，且启用了每天只推一次，则记录推送
-    if (
-        CONFIG["PUSH_WINDOW"]["ENABLED"]
-        and CONFIG["PUSH_WINDOW"]["ONCE_PER_DAY"]
-        and any(results.values())
-    ):
+    # 如果成功发送了任何通知，记录推送
+    if CONFIG["PUSH_WINDOW"]["ENABLED"] and any(results.values()):
         push_manager = PushRecordManager()
-        push_manager.record_push(report_type)
-
+        current_window = push_manager.get_current_window()
+        if current_window:
+            push_manager.record_push(report_type, window=current_window)
+    
     return results
 
 
