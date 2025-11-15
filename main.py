@@ -74,6 +74,7 @@ def load_config():
         "RANK_THRESHOLD": config_data["report"]["rank_threshold"],
         "USE_PROXY": config_data["crawler"]["use_proxy"],
         "DEFAULT_PROXY": config_data["crawler"]["default_proxy"],
+        "MAX_TITLES_PER_WORD": config_data["report"].get("max_titles_per_word", 999),
         "ENABLE_CRAWLER": os.environ.get("ENABLE_CRAWLER", "").strip().lower()
         in ("true", "1")
         if os.environ.get("ENABLE_CRAWLER", "").strip()
@@ -1306,7 +1307,7 @@ def count_word_frequency(
             print(
                 f"当前榜单模式：{total_input_news} 条当前榜单新闻中有 {matched_count} 条{filter_status}"
             )
-
+    max_titles = CONFIG.get("MAX_TITLES_PER_WORD", 999)
     stats = []
     for group_key, data in word_stats.items():
         all_titles = []
@@ -1321,7 +1322,7 @@ def count_word_frequency(
                 min(x["ranks"]) if x["ranks"] else 999,
                 -x["count"],
             ),
-        )
+        )[:max_titles]
 
         stats.append(
             {
