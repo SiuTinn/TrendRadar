@@ -1,31 +1,12 @@
 DeepSeek
-梁文锋
-
-华为
-鸿蒙
-HarmonyOS
-Ascend
-
-大疆
-DJI
-
-宇树
-王兴兴
-
-智元
-灵犀
-稚晖君
-彭志辉
-
-京东
-刘强东
 
 字节
 bytedance
-张一鸣
+豆包
 
-特斯拉
 马斯克
+
+混元
 
 微软
 Microsoft
@@ -33,8 +14,6 @@ Microsoft
 英伟达
 NVIDIA
 黄仁勋
-
-AMD
 
 谷歌
 google
@@ -53,36 +32,23 @@ ipad
 mac
 ios
 
-qwen
+Qwen
 
+GLM
+
+英超
 曼联
-+比赛
 
+NBA
 湖人
 东契奇
-+比赛
 
 ai
 !gai
 人工智能
 
-自动驾驶
-
 美国
-
-芯片
-光刻机
 
 科技
 
-核能
-
-水电站
-雅鲁藏布江
-
-月球
-登月
-火星
-宇宙
-飞船
-航空
+宇树
