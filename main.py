@@ -453,30 +453,40 @@ class PushRecordManager:
         return result
     
     def get_last_push_time(self, window: str) -> Optional[datetime]:
-        """获取指定时间窗口的最近一次推送时间"""
-        record_file = self.get_today_record_file()
-        if not os.path.exists(record_file):
-            return None
+        """获取指定时间窗口的最近一次推送时间（包含历史记录）"""
 
-        try:
-            with open(record_file, "r", encoding="utf-8") as f:
-                record = json.load(f)
-        except Exception as e:
-            print(f"读取推送记录失败 {record_file}: {e}")
-            return None
+        record_files = sorted(
+            self.record_dir.glob("push_record_*.json"),
+            key=lambda p: p.stem,
+            reverse=True,
+        )
 
-        window_info = record.get("windows", {}).get(window)
-        push_time_str = window_info.get("push_time") if window_info else None
-        if not push_time_str:
+        if not record_files:
             return None
 
         tz = pytz.timezone("Asia/Shanghai")
-        try:
-            naive_time = datetime.strptime(push_time_str, "%Y-%m-%d %H:%M:%S")
-            return tz.localize(naive_time)
-        except Exception as e:
-            print(f"解析推送时间失败 {push_time_str}: {e}")
-            return None
+
+        for record_file in record_files:
+            try:
+                with open(record_file, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+            except Exception as e:
+                print(f"读取推送记录失败 {record_file}: {e}")
+                continue
+
+            window_info = record.get("windows", {}).get(window)
+            push_time_str = window_info.get("push_time") if window_info else None
+            if not push_time_str:
+                continue
+
+            try:
+                naive_time = datetime.strptime(push_time_str, "%Y-%m-%d %H:%M:%S")
+                return tz.localize(naive_time)
+            except Exception as e:
+                print(f"解析推送时间失败 {push_time_str}: {e}")
+                continue
+
+        return None
     
     def has_pushed_in_window(self, window: str) -> bool:
         """检查指定时间窗口今天是否已推送"""
