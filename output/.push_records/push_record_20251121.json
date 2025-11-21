@@ -4,9 +4,14 @@
       "pushed": true,
       "push_time": "2025-11-21 09:26:27",
       "report_type": "早晨汇总"
+    },
+    "evening": {
+      "pushed": true,
+      "push_time": "2025-11-21 17:20:58",
+      "report_type": "傍晚汇总"
     }
   },
   "pushed": true,
-  "push_time": "2025-11-21 09:26:27",
-  "report_type": "早晨汇总"
+  "push_time": "2025-11-21 17:20:58",
+  "report_type": "傍晚汇总"
 }
